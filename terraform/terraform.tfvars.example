@@ -1,0 +1,7 @@
+# Copy this file to terraform.tfvars and fill in your own values.
+# terraform.tfvars is gitignored — never commit real values.
+
+region           = "us-east-1"
+instance_type    = "t3.micro"
+key_name         = "your-existing-aws-keypair-name"
+allowed_ssh_cidr = "YOUR.PUBLIC.IP.ADDRESS/32" # e.g. run `curl -s ifconfig.me` to find yours

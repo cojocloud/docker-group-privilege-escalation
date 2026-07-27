@@ -1,0 +1,36 @@
+# falco_rule_docker_escape.yaml
+#
+# Runtime detection companion to the T1611 lab. Deployed by
+# ansible/playbook-harden.yml to /etc/falco/rules.d/ on hosts that run Falco.
+#
+# Flags any docker CLI invocation by an account that isn't in the approved
+# admin list — the same signal a SOC would use to catch a compromised
+# dev_user account attempting exactly the escape in exploit/docker_group_escape.sh.
+
+- list: allowed_docker_admins
+  items: [root, ansible, ec2-user, ubuntu]
+
+- rule: Unapproved User Invoked Docker CLI
+  desc: >
+    A non-admin account ran the docker CLI. Because docker-group membership
+    is root-equivalent (MITRE ATT&CK T1611), this is treated as a privilege
+    escalation attempt regardless of the specific subcommand used.
+  condition: >
+    spawned_process and proc.name = "docker" and not user.name in (allowed_docker_admins)
+  output: >
+    Unapproved docker invocation (user=%user.name command=%proc.cmdline
+    parent=%proc.pname container_id=%container.id)
+  priority: WARNING
+  tags: [privilege_escalation, container, T1611]
+
+- rule: Host Filesystem Bind-Mounted Into Container
+  desc: >
+    A container was started with the host root filesystem ("/") bind-mounted
+    in — the specific technique used to chroot out to host root.
+  condition: >
+    container_started and container.mount.source contains "/" and container.mount.dest = "/mnt"
+  output: >
+    Host root filesystem mounted into container (user=%user.name
+    image=%container.image.repository container_id=%container.id)
+  priority: CRITICAL
+  tags: [privilege_escalation, container, T1611]

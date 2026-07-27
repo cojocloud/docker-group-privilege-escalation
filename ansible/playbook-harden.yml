@@ -1,0 +1,119 @@
+---
+# playbook-harden.yml
+#
+# Remediates the T1611 misconfiguration introduced by playbook-vulnerable.yml:
+#   1. Removes dev_user from the docker group (revokes root-equivalent access).
+#   2. Adds an auditd watch so any future change to group membership is logged.
+#   3. Installs Falco from the official apt repo with the modern eBPF driver
+#      (no DKMS or kernel headers required) and deploys a custom rule
+#      (detection/falco_rule_docker_escape.yaml) so runtime docker-socket
+#      abuse is caught even if IAM/group drift happens again. Fully
+#      unattended: terraform apply -> ansible-playbook needs no manual steps.
+#
+# Run this after the exploit demo to show the before/after state.
+
+- name: Harden Docker host against T1611
+  hosts: lab
+  become: true
+
+  vars:
+    dev_user: dev_user
+
+  tasks:
+    - name: "[FIX] Remove dev_user from the docker group"
+      user:
+        name: "{{ dev_user }}"
+        groups: ""
+        append: false
+
+    - name: Install auditd
+      apt:
+        name: auditd
+        state: present
+        update_cache: true
+
+    - name: Watch /etc/group for membership changes (catches future drift)
+      lineinfile:
+        path: /etc/audit/rules.d/docker-group-watch.rules
+        create: true
+        line: "-w /etc/group -p wa -k docker_group_changes"
+        mode: "0640"
+      notify: restart auditd
+
+    - name: Watch the Docker socket for direct access attempts
+      lineinfile:
+        path: /etc/audit/rules.d/docker-group-watch.rules
+        create: true
+        line: "-w /var/run/docker.sock -p rwa -k docker_socket_access"
+      notify: restart auditd
+
+    - name: Ensure prerequisites for the Falco apt repo are present
+      apt:
+        name:
+          - ca-certificates
+          - curl
+          - gnupg
+        state: present
+        update_cache: true
+
+    - name: Download the Falco apt signing key
+      get_url:
+        url: https://falco.org/repo/falcosecurity-packages.asc
+        dest: /usr/share/keyrings/falco-archive-keyring.asc
+        mode: "0644"
+
+    - name: Dearmor the Falco apt signing key
+      command: >
+        gpg --yes --dearmor
+        -o /usr/share/keyrings/falco-archive-keyring.gpg
+        /usr/share/keyrings/falco-archive-keyring.asc
+      args:
+        creates: /usr/share/keyrings/falco-archive-keyring.gpg
+
+    - name: Add the Falco apt repository
+      apt_repository:
+        repo: "deb [signed-by=/usr/share/keyrings/falco-archive-keyring.gpg] https://download.falco.org/packages/deb stable main"
+        filename: falcosecurity
+        state: present
+        update_cache: true
+
+    - name: Install Falco, forcing a non-interactive install with the modern eBPF driver
+      apt:
+        name: falco
+        state: present
+      environment:
+        DEBIAN_FRONTEND: noninteractive
+        FALCO_FRONTEND: noninteractive
+        FALCO_DRIVER_CHOICE: modern_ebpf
+
+    - name: Ensure Falco rules directory exists
+      file:
+        path: /etc/falco/rules.d
+        state: directory
+        mode: "0755"
+
+    - name: Deploy Falco custom rule for docker-group escape detection
+      copy:
+        src: ../detection/falco_rule_docker_escape.yaml
+        dest: /etc/falco/rules.d/docker_escape.yaml
+        mode: "0644"
+      notify: restart falco
+
+    - name: Ensure the Falco modern-eBPF service is enabled and running
+      systemd:
+        name: falco-modern-bpf
+        state: started
+        enabled: true
+        daemon_reload: true
+
+  handlers:
+    - name: restart auditd
+      systemd:
+        name: auditd
+        state: restarted
+
+    - name: restart falco
+      systemd:
+        name: falco-modern-bpf
+        state: restarted
+        daemon_reload: true

@@ -1,0 +1,5 @@
+# Copy to hosts.ini and fill in the public IP from `terraform output instance_public_ip`.
+# hosts.ini is gitignored — it will contain your real IP and key path.
+
+[lab]
+lab-host ansible_host=YOUR.EC2.PUBLIC.IP ansible_user=ubuntu ansible_ssh_private_key_file=~/.ssh/your-existing-aws-keypair-name.pem ansible_ssh_common_args='-o StrictHostKeyChecking=no'
